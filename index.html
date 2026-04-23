@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta name="googlebot" content="noindex, nofollow">
 <title>North Star Vets — Practice Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
@@ -101,10 +103,16 @@
   .nav {
     background: #ffffff;
     border-bottom: 1px solid var(--border);
-    padding: 0 32px;
+    padding: 0 16px;
     display: flex;
     gap: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    white-space: nowrap;
+    scroll-snap-type: x proximity;
   }
+  .nav::-webkit-scrollbar { display: none; }
 
   .nav-tab {
     padding: 12px 16px;
@@ -373,14 +381,158 @@
 
   .insight strong { color: var(--ns-purple); }
 
-  @media (max-width: 900px) {
-    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
-    .chart-row.cols-2, .chart-row.cols-3 { grid-template-columns: 1fr; }
-    .header { flex-direction: column; gap: 12px; align-items: flex-start; }
+
+  @media (max-width: 768px) {
+    .header { padding: 12px 16px; flex-wrap: wrap; gap: 10px; }
+    .header-left { gap: 12px; }
+    .header-left img { height: 34px; }
+    .practice-pills { flex-wrap: wrap; gap: 5px; }
+    .pill { font-size: 11px; padding: 4px 9px; }
+    
+    .panel { padding: 16px; }
+    
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
+    .kpi-value { font-size: 20px; }
+    
+    .chart-row.cols-2,
+    .chart-row.cols-3 { grid-template-columns: 1fr; }
+    
+    .chart-card { padding: 14px; }
+    .chart-wrap { height: 180px; }
+    .chart-wrap.tall { height: 220px; }
+    .chart-wrap.short { height: 130px; }
+    
+    .nav-tab { padding: 10px 12px; font-size: 12px; scroll-snap-align: start; }
+    
+    .toggle-group { flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+    .toggle-btn { font-size: 11px; padding: 5px 10px; }
+    
+    /* Heatmap: hide on mobile, show message */
+    .heatmap-scroll-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      scrollbar-color: #d8cff0 transparent;
+    }
+    .heatmap-scroll-wrap::-webkit-scrollbar { height: 4px; }
+    .heatmap-scroll-wrap::-webkit-scrollbar-thumb { background: #d8cff0; border-radius: 2px; }
+    
+    #heatmap-container { min-width: 700px; font-size: 10px; }
+    
+    .hm-cell { padding: 4px 2px; font-size: 9px; }
+    
+    #forecast-table, .data-table { font-size: 11px; }
+    #forecast-table th, .data-table th,
+    #forecast-table td, .data-table td { padding: 6px 8px; }
+
+    #pw-box { padding: 28px 20px; margin: 16px; }
   }
+  
+  @media (max-width: 480px) {
+    .kpi-grid { grid-template-columns: 1fr 1fr; }
+    .kpi-value { font-size: 18px; }
+    .kpi-label { font-size: 10px; }
+    .kpi-sub { font-size: 11px; }
+  }
+
 </style>
+
+<style>
+  #pw-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: linear-gradient(135deg, #f7f5fb 0%, #ede8f6 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'DM Sans', sans-serif;
+  }
+  #pw-box {
+    background: white;
+    border: 1px solid #d8cff0;
+    border-top: 4px solid #542579;
+    border-radius: 12px;
+    padding: 40px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 8px 32px rgba(84,37,121,0.12);
+    text-align: center;
+  }
+  #pw-box img { height: 48px; margin-bottom: 20px; }
+  #pw-box h2 { font-size: 18px; color: #1a1030; margin-bottom: 6px; font-weight: 600; }
+  #pw-box p { font-size: 13px; color: #6b5f85; margin-bottom: 24px; }
+  #pw-input {
+    width: 100%; padding: 10px 14px; font-size: 15px;
+    border: 1px solid #d8cff0; border-radius: 8px;
+    outline: none; color: #1a1030; margin-bottom: 12px;
+    font-family: 'DM Sans', sans-serif; box-sizing: border-box;
+  }
+  #pw-input:focus { border-color: #542579; box-shadow: 0 0 0 3px rgba(84,37,121,0.1); }
+  #pw-btn {
+    width: 100%; padding: 11px; background: #542579; color: white;
+    border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
+    cursor: pointer; font-family: 'DM Sans', sans-serif;
+  }
+  #pw-btn:hover { background: #6b3a96; }
+  #pw-error { color: #dc2626; font-size: 13px; margin-top: 8px; display: none; }
+</style>
+<script>
+  // Password gate - runs before page renders
+  (function() {
+    const PASS = 'northstar2025';
+    const KEY = 'nsv_auth';
+    const SESSION_HOURS = 8;
+    
+    function isAuthed() {
+      try {
+        const stored = sessionStorage.getItem(KEY);
+        if (!stored) return false;
+        const data = JSON.parse(stored);
+        return data.ts && (Date.now() - data.ts) < SESSION_HOURS * 3600000;
+      } catch(e) { return false; }
+    }
+    
+    if (!isAuthed()) {
+      document.addEventListener('DOMContentLoaded', function() {
+        const overlay = document.getElementById('pw-overlay');
+        if (overlay) overlay.style.display = 'flex';
+        
+        const btn = document.getElementById('pw-btn');
+        const input = document.getElementById('pw-input');
+        const err = document.getElementById('pw-error');
+        
+        function attempt() {
+          if (input.value === PASS) {
+            sessionStorage.setItem('nsv_auth', JSON.stringify({ts: Date.now()}));
+            overlay.style.display = 'none';
+          } else {
+            err.style.display = 'block';
+            input.value = '';
+            input.focus();
+          }
+        }
+        
+        btn.addEventListener('click', attempt);
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
+      });
+    } else {
+      document.addEventListener('DOMContentLoaded', function() {
+        const overlay = document.getElementById('pw-overlay');
+        if (overlay) overlay.style.display = 'none';
+      });
+    }
+  })();
+</script>
 </head>
 <body>
+<div id="pw-overlay" style="display:none">
+  <div id="pw-box">
+    <p style="font-size:22px;margin-bottom:4px">🐾</p>
+    <h2>North Star Vets Dashboard</h2>
+    <p>Enter the access password to continue</p>
+    <input type="password" id="pw-input" placeholder="Password" autocomplete="current-password">
+    <button id="pw-btn">Access Dashboard</button>
+    <p id="pw-error">Incorrect password. Please try again.</p>
+  </div>
+</div>
+
 
 <header class="header">
   <div class="header-left" style="display:flex;align-items:center;gap:20px">
@@ -555,7 +707,7 @@
         <div class="chart-card-sub">Each cell = monthly revenue. Darker = higher revenue.</div>
       </div>
     </div>
-    <div id="heatmap-container"></div>
+    <div class="heatmap-scroll-wrap"><div id="heatmap-container"></div></div>
   </div>
 
   <div class="chart-row cols-3">
